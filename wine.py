@@ -211,13 +211,13 @@ checkpoint = {
     "best_val_f1": best_val_f1,
 }
 
-torch.save(checkpoint, "checkpoint.pth")
+torch.save(checkpoint, "wine_checkpoint.pth")
 print("Checkpoint saved!")
 
 loaded_model = WineClassifier(input_size=13, hidden_size=64, output_size=3)
 loaded_model = loaded_model.to(device)
 
-loaded_checkpoint = torch.load("checkpoint.pth", map_location=device)
+loaded_checkpoint = torch.load("wine_checkpoint.pth", map_location=device)
 loaded_model.load_state_dict(loaded_checkpoint["model_state_dict"])
 optimizer.load_state_dict(loaded_checkpoint["optimizer_state_dict"])
 
