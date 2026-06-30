@@ -79,7 +79,7 @@ total = sum(p.numel() for p in model.parameters())
 print(f"Total parameters: {total:,}")
 
 loss_fn = nn.CrossEntropyLoss()
-optimizer = optim.Adam(model.parameters(), lr=0.001, weight_decay=0.01)
+optimizer = optim.AdamW(model.parameters(), lr=0.001, weight_decay=0.01)
 
 best_val_f1 = 0.0
 best_model_state = None
