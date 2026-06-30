@@ -59,7 +59,6 @@ Output (Malignant / Benign)
 
 ## Key Learnings
 
-- Built the complete PyTorch training loop from scratch for the first time
 - Learned the correct order: zero_grad → forward → loss → backward → step
 - Understood why features must be scaled before training
 - Implemented early stopping and model checkpointing
