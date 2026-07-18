@@ -7,12 +7,14 @@ from sklearn.metrics import classification_report, f1_score
 import numpy as np
 import pandas as pd
 from sklearn.model_selection import train_test_split
+from sklearn.utils.class_weight import compute_class_weight
+
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 print(f"Using device: {device}")
 
 # Load data
-df = pd.read_csv('nigerian_pidgin_reviews.csv')
+df = pd.read_csv('combined_train.csv')
 texts  = df['text'].tolist()
 labels = df['label'].tolist()
 
@@ -23,7 +25,7 @@ y = np.array([label_map[label] for label in labels])
 X_train, X_test, y_train, y_test = train_test_split(texts, y, test_size=0.2, random_state=42, stratify=y)
 
 # TF-IDF Vectorization
-vectorizer = TfidfVectorizer(max_features=500)
+vectorizer = TfidfVectorizer(max_features=5000, ngram_range=(1, 2), min_df=2, sublinear_tf=True)
 X_train    = vectorizer.fit_transform(X_train).toarray()
 X_val      = vectorizer.transform(X_test).toarray()
 
@@ -35,10 +37,10 @@ y_val_t   = torch.tensor(y_test,  dtype=torch.long)
 
 # Setup clean DataLoaders
 train_dataset = TensorDataset(X_train_t, y_train_t)
-train_loader = DataLoader(train_dataset, batch_size=8, shuffle=True, drop_last=True)
+train_loader = DataLoader(train_dataset, batch_size=64, shuffle=True, drop_last=True)
 
 val_dataset = TensorDataset(x_val_t, y_val_t)
-val_loader = DataLoader(val_dataset, batch_size=8, shuffle=False)
+val_loader = DataLoader(val_dataset, batch_size=64, shuffle=False)
 
 # Model definition remains unchanged
 class SentimentClassifier(nn.Module):
@@ -48,7 +50,7 @@ class SentimentClassifier(nn.Module):
         self.layer2 = nn.Linear(hidden_size, hidden_size // 2)
         self.layer3 = nn.Linear(hidden_size // 2, output_size)
         self.relu = nn.ReLU()
-        self.dropout = nn.Dropout(0.2)
+        self.dropout = nn.Dropout(0.1)
         self.bn1 = nn.BatchNorm1d(hidden_size)
         self.bn2 = nn.BatchNorm1d(hidden_size // 2)
 
@@ -62,14 +64,23 @@ class SentimentClassifier(nn.Module):
 
 model = SentimentClassifier(input_size=X_train.shape[1], hidden_size=32, output_size=3).to(device)
 
-loss_fn = nn.CrossEntropyLoss()
+class_weights = compute_class_weight(
+    class_weight='balanced',
+    classes=np.array([0, 1, 2]),   # positive, negative, neutral per your label_map
+    y=y_train
+)
+class_weights_t = torch.tensor(class_weights, dtype=torch.float32).to(device)
+print(f"Class weights (positive, negative, neutral): {class_weights}")
+
+loss_fn = nn.CrossEntropyLoss(weight=class_weights_t)
 optimizer = optim.AdamW(model.parameters(), lr=0.001, weight_decay=0.01)
 
 best_val_f1 = 0.0
 best_model_state = None
 no_improve = 0
-patience = 10
-num_epochs = 100
+patience = 20
+num_epochs = 800
+best_val_loss = float('inf')
 
 for epoch in range(num_epochs):
     model.train()
@@ -113,8 +124,9 @@ for epoch in range(num_epochs):
     avg_val_loss = total_val_loss / max(1, len(val_loader))
     val_f1 = f1_score(val_labels_all, val_preds_all, average="weighted")
 
-    if val_f1 > best_val_f1:
+    if val_f1 > best_val_f1 and avg_val_loss <= best_val_loss * 1.15:
         best_val_f1 = val_f1
+        best_val_loss = avg_val_loss
         best_model_state = model.state_dict()
         no_improve = 0
         status = "improved"
@@ -146,6 +158,46 @@ with torch.no_grad():
 
 report = classification_report(all_labels, all_preds, target_names=['positive', 'negative', 'neutral'], zero_division=0)
 print(report)
+
+real_df = pd.read_csv('naijasenti_test.csv')
+print(f"Loaded real test set: {len(real_df)} rows, label counts:\n{real_df['label'].value_counts()}")
+
+real_texts = real_df['text'].tolist()
+real_labels = real_df['label'].tolist()
+y_real = np.array([label_map[label] for label in real_labels])
+
+# IMPORTANT: transform only, do NOT fit_transform — must reuse training vocabulary
+X_real = vectorizer.transform(real_texts).toarray()
+X_real_t = torch.tensor(X_real, dtype=torch.float32)
+y_real_t = torch.tensor(y_real, dtype=torch.long)
+
+real_dataset = TensorDataset(X_real_t, y_real_t)
+real_loader = DataLoader(real_dataset, batch_size=64, shuffle=False)
+
+model.eval()
+real_preds_all = []
+real_labels_all = []
+
+with torch.no_grad():
+    for X_batch, y_batch in real_loader:
+        X_batch, y_batch = X_batch.to(device), y_batch.to(device)
+        logits = model(X_batch)
+        preds = logits.argmax(dim=1).cpu().numpy()
+        real_preds_all.extend(preds)
+        real_labels_all.extend(y_batch.cpu().numpy())
+
+print("\n=== Evaluation on REAL, unseen Pidgin tweets (naijasenti_test.csv) ===")
+real_report = classification_report(
+    real_labels_all, real_preds_all,
+    target_names=['positive', 'negative', 'neutral'],
+    zero_division=0
+)
+print(real_report)
+
+# Sanity check: how much of the real vocabulary did TF-IDF actually recognize?
+real_vecs = vectorizer.transform(real_texts)
+nonzero_rows = (real_vecs.sum(axis=1) > 0).sum()
+print(f"Real test rows with at least one recognized TF-IDF feature: {nonzero_rows}/{len(real_texts)}")
 
 # Checkpoint Structure
 checkpoint = {
